@@ -122,6 +122,7 @@ mkPackagePlan :: MonadThrow m
               -> GenericPackageDescription
               -> m PackagePlan
 mkPackagePlan bc gpd = do
+    ccFlags <- liftM mconcat $ mapM getFlag $ genPackageFlags gpd
     ppDesc <- toSimpleDesc CheckCond {..} gpd
     return PackagePlan {..}
   where
@@ -135,16 +136,22 @@ mkPackagePlan bc gpd = do
     ccArch = siArch
     ccCompilerFlavor = Distribution.Compiler.GHC
     ccCompilerVersion = siGhcVersion
-    ccFlags = flags
     ccIncludeTests = pcTests ppConstraints /= Don'tBuild
     ccIncludeBenchmarks = pcBuildBenchmarks ppConstraints
 
     SystemInfo {..} = bcSystemInfo bc
 
     overrides = pcFlagOverrides ppConstraints
-    getFlag MkFlag {..} =
-        (flagName, fromMaybe flagDefault $ lookup flagName overrides)
-    flags = mapFromList $ map getFlag $ genPackageFlags gpd
+    getFlag MkFlag {..} = do
+        let moverride = lookup flagName overrides
+            flagValue = fromMaybe flagDefault moverride
+        when (isJust moverride && flagManual) $
+            throwM $ ManualFlagOverridden name flagName
+        return $ singletonMap flagName flagValue
+
+data ManualFlagOverridden = ManualFlagOverridden PackageName FlagName
+    deriving (Show, Typeable)
+instance Exception ManualFlagOverridden
 
 getLatestAllowedPlans :: MonadIO m => BuildConstraints -> m (Map PackageName PackagePlan)
 getLatestAllowedPlans bc =
